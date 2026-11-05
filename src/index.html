@@ -531,6 +531,13 @@ label.setting { cursor: pointer; }
       <section class="settings-pane" data-section="board">
         <h3>Board</h3>
         <label class="setting">
+          <span class="text">Language<span>Choose the interface language</span></span>
+          <select class="field" id="settings-language" aria-label="Language">
+            <option value="en">English</option>
+            <option value="ru">Русский</option>
+          </select>
+        </label>
+        <label class="setting">
           <span class="text">Backlog column<span>A column before todo, for tasks agents leave alone</span></span>
           <span class="switch"><input type="checkbox" id="settings-backlog" aria-label="Backlog column"><span></span></span>
         </label>
