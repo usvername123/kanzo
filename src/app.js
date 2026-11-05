@@ -91,6 +91,9 @@ const UI_TRANSLATIONS = {
   "Syncing…":"Синхронизация…","Save and sync":"Сохранить и синхронизировать","Create a private repo on GitHub":"Создать приватный репозиторий на GitHub",
   "Keep this board the same on all your machines through a private git repo you own. Use the same repo on each machine.":"Синхронизируйте доску между компьютерами через собственный приватный Git-репозиторий. Используйте один и тот же репозиторий на каждом компьютере.",
   "There are no logins: share only on a network you trust.":"Вход в систему не предусмотрен: открывайте доступ только в доверенной сети.",
+  "Status":"Статус","Leave":"Выйти","Version":"Версия",
+  "The slug starts each task's key, like api#12.":"Идентификатор проекта используется в ключе задачи, например api#12.",
+  "Board not reachable — is kanzo running?":"Доска недоступна — Kanzo запущен?",
   "English":"English","Русский":"Русский"
 };
 const UI_TRANSLATIONS_REVERSE = Object.fromEntries(Object.entries(UI_TRANSLATIONS).map(([en, ru]) => [ru, en]));
