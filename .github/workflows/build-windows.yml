@@ -1,0 +1,47 @@
+name: Windows x64 build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Kanzo for Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package Windows x64 binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/release/kanzo.exe dist/kanzo.exe
+          Copy-Item README.md dist/README.md
+          if (Test-Path LICENSE) { Copy-Item LICENSE dist/LICENSE }
+          Compress-Archive -Path dist/* -DestinationPath kanzo-windows-x64.zip -Force
+
+      - name: Upload Windows x64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kanzo-windows-x64
+          path: kanzo-windows-x64.zip
+          if-no-files-found: error
