@@ -398,6 +398,7 @@ struct BoardQuery {
 
 #[derive(Serialize)]
 struct Board {
+    archive_after_days: i64,
     changes: String,
     done_hidden: usize,
     hidden_properties: Vec<String>,
@@ -420,6 +421,7 @@ async fn board(State(home): Shared, Query(q): Query<BoardQuery>) -> Response {
             tasks.retain(|t| found.contains(&t.id));
         }
         Ok(Board {
+            archive_after_days: s.archive_after_days()?,
             changes: change_token(h, s)?,
             done_hidden,
             hidden_properties: s.hidden_properties()?,
@@ -501,12 +503,19 @@ struct NewTask {
     title: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    assignee: String,
 }
 
 async fn create_task(State(home): Shared, Json(t): Json<NewTask>) -> Response {
     with_store(home, move |_, s| {
         let project = s.find_project(&t.project)?;
-        s.create_task_in(project.id, None, &t.title, &t.description)
+        let task = s.create_task_in(project.id, None, &t.title, &t.description)?;
+        if t.assignee.trim().is_empty() {
+            Ok(task)
+        } else {
+            s.update_task(task.id, TaskPatch { assignee: Some(t.assignee), ..Default::default() })
+        }
     })
     .await
 }
@@ -516,12 +525,14 @@ async fn create_task(State(home): Shared, Json(t): Json<NewTask>) -> Response {
 enum Settings {
     Backlog { backlog: bool },
     Property { property: String, visible: bool },
+    ArchiveAfterDays { archive_after_days: i64 },
 }
 
 async fn update_settings(State(home): Shared, Json(r): Json<Settings>) -> Response {
     with_store(home, move |_, s| match r {
         Settings::Backlog { backlog } => s.set_backlog(backlog),
         Settings::Property { property, visible } => s.set_property(&property, visible),
+        Settings::ArchiveAfterDays { archive_after_days } => s.set_archive_after_days(archive_after_days),
     })
     .await
 }
@@ -549,6 +560,7 @@ struct Patch {
     tags: Option<String>,
     human: Option<bool>,
     url: Option<String>,
+    assignee: Option<String>,
 }
 
 async fn update_task(State(home): Shared, Path(id): Path<i64>, Json(p): Json<Patch>) -> Response {
@@ -564,6 +576,7 @@ async fn update_task(State(home): Shared, Path(id): Path<i64>, Json(p): Json<Pat
                 tags: p.tags,
                 human: p.human,
                 url: p.url,
+                assignee: p.assignee,
             },
         )
     })

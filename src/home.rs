@@ -251,7 +251,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("config.toml"), "statuses = [\"todo\", \"doing\", \"done\"]\n").unwrap();
         let home = Home::open(tmp.path().to_path_buf()).unwrap();
-        assert_eq!(home.store().unwrap().statuses(), ["todo", "doing", "review", "done"]);
+        assert_eq!(home.store().unwrap().statuses(), ["todo", "doing", "done", "archive"]);
     }
 
     #[test]

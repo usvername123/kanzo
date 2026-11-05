@@ -36,7 +36,7 @@ macro_rules! instructions {
             $whose,
             " machine, for all their projects. Tasks look like api#12. ",
             $project,
-            " Keep it current unasked: doing when you start a task, comments on what you did, review when you \
+            " Keep it current unasked: doing when you start a task, comments on what you did, done when you \
              finish or get stuck, url for a PR you opened. Leave done and human tasks to the user."
         )
     };
@@ -216,6 +216,8 @@ struct CreateTaskArgs {
     status: Option<String>,
     /// For the user, not for agents.
     human: Option<bool>,
+    /// Person responsible for the task.
+    assignee: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -226,7 +228,7 @@ struct UpdateTaskArgs {
     title: Option<String>,
     /// Markdown.
     description: Option<String>,
-    /// Column, like review.
+    /// Column, like doing or done.
     status: Option<String>,
     /// Comma-separated; "" clears.
     tags: Option<String>,
@@ -234,6 +236,8 @@ struct UpdateTaskArgs {
     human: Option<bool>,
     /// A link; "" clears.
     url: Option<String>,
+    /// Person responsible for the task; "" clears it.
+    assignee: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -459,9 +463,9 @@ impl Kanzo {
                 let status = args.status.map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
                 let description = args.description.as_deref().unwrap_or("");
                 let mut t = store.create_task_in(project.id, status.as_deref(), &args.title, description)?;
-                if args.tags.is_some() || args.human.is_some() {
+                if args.tags.is_some() || args.human.is_some() || args.assignee.is_some() {
                     t = store
-                        .update_task(t.id, TaskPatch { tags: args.tags, human: args.human, ..Default::default() })?;
+                        .update_task(t.id, TaskPatch { tags: args.tags, human: args.human, assignee: args.assignee, ..Default::default() })?;
                 }
                 Ok(format!("Created {} in {}: {}", t.key(), t.status, t.title))
             })
@@ -484,6 +488,7 @@ impl Kanzo {
                         project_id: None,
                         human: args.human,
                         url: args.url,
+                        assignee: args.assignee,
                     },
                 )?;
                 let moved = if before.status != after.status {
@@ -623,6 +628,9 @@ fn task_detail(ctx: &Ctx, store: &Store, t: &Task) -> store::Result<String> {
         write_tags(&mut out, t);
     }
     let _ = write!(out, "\nstatus: {}", t.status);
+    if shown(&hidden, "assignee") && !t.assignee.is_empty() {
+        let _ = write!(out, ", assignee: {}", t.assignee);
+    }
     if t.human && shown(&hidden, "human") {
         out.push_str(", human: for the user, not for agents");
     }

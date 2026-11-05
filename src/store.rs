@@ -42,6 +42,11 @@ const MIGRATIONS: &[&str] = &[
      CREATE TRIGGER images_delete AFTER DELETE ON images BEGIN UPDATE meta SET value = value + 1 WHERE key = 'changes'; END;",
     "ALTER TABLE tasks ADD COLUMN human INTEGER NOT NULL DEFAULT 0;",
     "ALTER TABLE tasks ADD COLUMN url TEXT NOT NULL DEFAULT '';",
+    // Nullable/defaulted additions keep existing note databases usable by older Kanzo releases.
+    "ALTER TABLE tasks ADD COLUMN assignee TEXT NOT NULL DEFAULT '';
+     ALTER TABLE tasks ADD COLUMN completed_at TEXT;
+     UPDATE tasks SET status = 'done', completed_at = updated_at WHERE status = 'review';
+     UPDATE tasks SET completed_at = updated_at WHERE status = 'done' AND completed_at IS NULL;",
 ];
 
 const PROJECT_COLORS: &[&str] = &["gray", "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"];
@@ -103,6 +108,7 @@ pub struct Task {
     pub tags: Vec<String>,
     /// A link to anything, like the task's pull request; empty when there is none.
     pub url: String,
+    pub assignee: String,
     pub human: bool,
     pub status: String,
     pub position: f64,
@@ -142,17 +148,20 @@ pub struct TaskPatch {
     pub project_id: Option<i64>,
     pub tags: Option<String>,
     pub url: Option<String>,
+    pub assignee: Option<String>,
     pub human: Option<bool>,
 }
 
-const STATUSES: [&str; 4] = ["todo", "doing", "review", "done"];
+const STATUSES: [&str; 4] = ["todo", "doing", "done", "archive"];
 
-pub const DONE: &str = STATUSES[3];
+pub const DONE: &str = STATUSES[2];
+
+pub const ARCHIVE: &str = STATUSES[3];
 
 pub const BACKLOG: &str = "backlog";
 
 /// What a task shows besides its id, title and status; each can be turned off in Settings.
-const PROPERTIES: [&str; 8] = ["description", "tags", "url", "human", "created", "updated", "comments", "images"];
+const PROPERTIES: [&str; 9] = ["description", "tags", "url", "assignee", "human", "created", "updated", "comments", "images"];
 
 pub struct Store {
     conn: Connection,
@@ -304,7 +313,7 @@ impl Store {
     const PROJECT_SELECT: &str = "SELECT p.id, p.slug, p.name,
             (SELECT group_concat(repo, ',' ORDER BY r.rowid) FROM project_repos r WHERE r.project_id = p.id),
             p.color, p.created_at,
-            (SELECT count(*) FROM tasks t WHERE t.project_id = p.id AND t.status <> ?1),
+            (SELECT count(*) FROM tasks t WHERE t.project_id = p.id AND t.status NOT IN (?1, ?2)),
             (SELECT count(*) FROM tasks t WHERE t.project_id = p.id)
         FROM projects p";
 
@@ -324,22 +333,22 @@ impl Store {
     pub fn list_projects(&self) -> Result<Vec<Project>> {
         let sql = format!("{} ORDER BY p.slug", Self::PROJECT_SELECT);
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map([DONE], Self::project_row)?;
+        let rows = stmt.query_map([DONE, ARCHIVE], Self::project_row)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     fn project_where(&self, clause: &str, value: &str) -> Result<Option<Project>> {
         let sql = format!("{} WHERE {clause}", Self::PROJECT_SELECT);
-        Ok(self.conn.query_row(&sql, params![DONE, value], Self::project_row).optional()?)
+        Ok(self.conn.query_row(&sql, params![DONE, ARCHIVE, value], Self::project_row).optional()?)
     }
 
     pub fn project_by_slug(&self, slug: &str) -> Result<Option<Project>> {
-        self.project_where("p.slug = ?2", &slug.trim().to_ascii_lowercase())
+        self.project_where("p.slug = ?3", &slug.trim().to_ascii_lowercase())
     }
 
     pub fn project_by_repo(&self, repo: &str) -> Result<Option<Project>> {
         match repo_from_url(repo) {
-            Some(repo) => self.project_where("p.id = (SELECT project_id FROM project_repos WHERE repo = ?2)", &repo),
+            Some(repo) => self.project_where("p.id = (SELECT project_id FROM project_repos WHERE repo = ?3)", &repo),
             None => Ok(None),
         }
     }
@@ -455,7 +464,7 @@ impl Store {
 
     const TASK_SELECT: &str = "SELECT t.id, p.slug, t.title, t.description, t.status, t.position,
             t.created_at, t.updated_at, (SELECT count(*) FROM comments c WHERE c.task_id = t.id), t.tags, t.human,
-            t.url
+            t.url, t.assignee
         FROM tasks t JOIN projects p ON p.id = t.project_id";
 
     fn task_row(r: &Row) -> rusqlite::Result<Task> {
@@ -466,6 +475,7 @@ impl Store {
             description: r.get(3)?,
             tags: r.get::<_, String>(9)?.split(',').filter(|t| !t.is_empty()).map(String::from).collect(),
             url: r.get(11)?,
+            assignee: r.get(12)?,
             human: r.get(10)?,
             status: r.get(4)?,
             position: r.get(5)?,
@@ -486,6 +496,7 @@ impl Store {
         status: Option<&str>,
         keep_done: Option<usize>,
     ) -> Result<(Vec<Task>, usize)> {
+        self.archive_completed_tasks()?;
         let done = DONE;
         // SQLite reads a negative LIMIT as no limit.
         let limit = keep_done.map_or(-1, |n| n as i64);
@@ -518,6 +529,7 @@ impl Store {
 
     // LIKE already ignores the case of ASCII letters, as lower() would.
     pub fn search(&self, query: &str, limit: Option<usize>) -> Result<Vec<Task>> {
+        self.archive_completed_tasks()?;
         let words: Vec<&str> = query.split_whitespace().take(10).collect();
         let mut sql = format!("{} WHERE 1", Self::TASK_SELECT);
         for i in 0..words.len() {
@@ -566,6 +578,50 @@ impl Store {
         } else {
             Err(Error::Invalid(format!("unknown status {status:?}; use one of: {}", self.statuses().join(", "))))
         }
+    }
+
+    /// Number of full days a completed task stays visible before it moves to Archive.
+    /// The setting lives in `meta`, so old databases simply use the seven-day default.
+    pub fn archive_after_days(&self) -> Result<i64> {
+        let value: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = 'archive_after_days'", [], |r| r.get(0))
+            .optional()?;
+        Ok(value.and_then(|v| v.parse().ok()).filter(|days| (1..=3650).contains(days)).unwrap_or(7))
+    }
+
+    pub fn set_archive_after_days(&self, days: i64) -> Result<()> {
+        if !(1..=3650).contains(&days) {
+            return Err(Error::Invalid("archive delay must be between 1 and 3650 days".into()));
+        }
+        self.write(|c| {
+            c.execute(
+                "INSERT INTO meta (key, value) VALUES ('archive_after_days', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [days.to_string()],
+            )?;
+            c.execute("UPDATE meta SET value = value + 1 WHERE key = 'changes'", [])?;
+            Ok(())
+        })
+    }
+
+    /// This is deliberately read-triggered: local boards do not need a resident timer.
+    pub fn archive_completed_tasks(&self) -> Result<()> {
+        let days = self.archive_after_days()?;
+        self.write(|c| {
+            let ids: Vec<i64> = c
+                .prepare(
+                    "SELECT id FROM tasks WHERE status = ?1 AND completed_at IS NOT NULL
+                     AND completed_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', printf('-%d days', ?2))
+                     ORDER BY completed_at, id",
+                )?
+                .query_map(params![DONE, days], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            for id in ids {
+                let position = Self::end_of_column(c, ARCHIVE, id)?;
+                c.execute("UPDATE tasks SET status = ?1, position = ?2 WHERE id = ?3", params![ARCHIVE, position, id])?;
+            }
+            Ok(())
+        })
     }
 
     fn end_of_column(c: &Connection, status: &str, except: i64) -> Result<f64> {
@@ -617,10 +673,10 @@ impl Store {
                 &format!(
                     "UPDATE tasks SET title = coalesce(?1, title), project_id = coalesce(?2, project_id),
                        human = coalesce(?3, human), tags = coalesce(?4, tags),
-                       description = coalesce(?5, description), url = coalesce(?7, url), updated_at = {NOW}
+                       description = coalesce(?5, description), url = coalesce(?7, url), assignee = coalesce(?8, assignee), updated_at = {NOW}
                      WHERE id = ?6 AND (coalesce(?1, title), coalesce(?2, project_id), coalesce(?3, human),
-                       coalesce(?4, tags), coalesce(?5, description), coalesce(?7, url))
-                       <> (title, project_id, human, tags, description, url)"
+                       coalesce(?4, tags), coalesce(?5, description), coalesce(?7, url), coalesce(?8, assignee))
+                       <> (title, project_id, human, tags, description, url, assignee)"
                 ),
                 params![
                     title,
@@ -629,7 +685,8 @@ impl Store {
                     tags,
                     patch.description.as_deref().map(str::trim),
                     id,
-                    url
+                    url,
+                    patch.assignee.as_deref().map(str::trim),
                 ],
             )?;
             if let Some(s) = &patch.status
@@ -637,8 +694,9 @@ impl Store {
             {
                 let position = Self::end_of_column(c, s, id)?;
                 c.execute(
-                    &format!("UPDATE tasks SET status = ?1, position = ?2, updated_at = {NOW} WHERE id = ?3"),
-                    params![s, position, id],
+                    &format!("UPDATE tasks SET status = ?1, position = ?2,
+                              completed_at = CASE WHEN ?1 = ?4 THEN {NOW} ELSE NULL END, updated_at = {NOW} WHERE id = ?3"),
+                    params![s, position, id, DONE],
                 )?;
             }
             Ok(())
@@ -649,7 +707,6 @@ impl Store {
     pub fn move_task(&self, id: i64, status: &str, before: Option<i64>) -> Result<Task> {
         self.check_status(status)?;
         self.write(|c| {
-            let current = self.get_task(id)?;
             let before = before.filter(|b| *b != id);
             let anchor: Option<(i64, f64)> = match before {
                 Some(b) => c
@@ -683,10 +740,11 @@ impl Store {
                     }
                 }
             };
-            let touched = if current.status != status { format!(", updated_at = {NOW}") } else { String::new() };
             c.execute(
-                &format!("UPDATE tasks SET status = ?1, position = ?2{touched} WHERE id = ?3"),
-                params![status, position, id],
+                &format!("UPDATE tasks SET status = ?1, position = ?2,
+                          completed_at = CASE WHEN status <> ?1 THEN CASE WHEN ?1 = ?4 THEN {NOW} ELSE NULL END ELSE completed_at END,
+                          updated_at = CASE WHEN status <> ?1 THEN {NOW} ELSE updated_at END WHERE id = ?3"),
+                params![status, position, id, DONE],
             )?;
             Ok(())
         })?;
@@ -1009,6 +1067,21 @@ mod tests {
     }
 
     #[test]
+    fn archives_completed_tasks_after_the_configured_delay() {
+        let (_dir, s) = store();
+        let p = s.create_project("api", "", None).unwrap();
+        let done = s.create_task(p.id, "ship it", "").unwrap();
+        s.move_task(done.id, DONE, None).unwrap();
+        s.set_archive_after_days(1).unwrap();
+        s.conn.execute("UPDATE tasks SET completed_at = '2000-01-01T00:00:00Z' WHERE id = ?1", [done.id]).unwrap();
+
+        let tasks = s.list_tasks(None, None).unwrap();
+        assert_eq!(tasks[0].status, ARCHIVE);
+        assert_eq!(s.archive_after_days().unwrap(), 1);
+        assert!(s.set_archive_after_days(0).is_err());
+    }
+
+    #[test]
     fn opens_a_board_from_a_newer_kanzo_when_it_can() {
         let (_dir, s) = store();
         let set = |version: usize, compatible: usize| {
@@ -1153,15 +1226,15 @@ mod tests {
         let t = s
             .update_task(
                 t.id,
-                TaskPatch { status: Some("review".into()), title: Some("Fix login bug".into()), ..Default::default() },
+                TaskPatch { status: Some("done".into()), title: Some("Fix login bug".into()), ..Default::default() },
             )
             .unwrap();
-        assert_eq!((t.title.as_str(), t.status.as_str()), ("Fix login bug", "review"));
+        assert_eq!((t.title.as_str(), t.status.as_str()), ("Fix login bug", "done"));
         assert!(s.update_task(t.id, TaskPatch { status: Some("nope".into()), ..Default::default() }).is_err());
         assert!(s.update_task(t.id, TaskPatch { title: Some("  ".into()), ..Default::default() }).is_err());
         let web = s.create_project("web", "", None).unwrap();
         let moved = s.update_task(t.id, TaskPatch { project_id: Some(web.id), ..Default::default() }).unwrap();
-        assert_eq!((moved.key(), moved.status.as_str()), (format!("web#{}", t.id), "review"));
+        assert_eq!((moved.key(), moved.status.as_str()), (format!("web#{}", t.id), "done"));
         let t = s.update_task(t.id, TaskPatch { project_id: Some(p.id), ..Default::default() }).unwrap();
 
         s.add_comment(t.id, "claude-code", "Done, see PR", &[]).unwrap();
@@ -1173,6 +1246,7 @@ mod tests {
         let tagged =
             s.update_task(t.id, TaskPatch { tags: Some(" Bug, UI,bug ,, needs  review".into()), ..Default::default() });
         assert_eq!(tagged.unwrap().tags, ["bug", "ui", "needs review"]);
+        assert_eq!(s.update_task(t.id, TaskPatch { assignee: Some("Ada".into()), ..Default::default() }).unwrap().assignee, "Ada");
         assert!(
             s.update_task(t.id, TaskPatch { tags: Some(" , ".into()), ..Default::default() }).unwrap().tags.is_empty()
         );
@@ -1264,7 +1338,7 @@ mod tests {
         assert_eq!(s.statuses(), STATUSES);
         s.set_backlog(true).unwrap();
         let s = Store::open(&dir.path().join("kanzo.db"), None).unwrap();
-        assert_eq!(s.statuses(), ["backlog", "todo", "doing", "review", "done"]);
+        assert_eq!(s.statuses(), ["backlog", "todo", "doing", "done", "archive"]);
         let api = s.create_project("api", "", None).unwrap();
         let backlog = s.create_task_in(api.id, Some("backlog"), "later", "").unwrap();
         assert_eq!(backlog.status, "backlog");

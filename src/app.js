@@ -63,7 +63,7 @@ const UI_TRANSLATIONS = {
   "Settings":"Настройки","Check for updates":"Проверить обновления","Sync":"Синхронизация","Welcome to Kanzo":"Добро пожаловать в Kanzo",
   "Create your first project in the sidebar. Link it to a GitHub repo and agents working in that repo will find it on their own.":"Создайте первый проект на боковой панели. Привяжите репозиторий GitHub — агенты, работающие с ним, обнаружат доску автоматически.",
   "New project":"Новый проект","New task":"Новая задача","Create a project first":"Сначала создайте проект","Show older":"Показать старые","Backlog":"Бэклог",
-  "todo":"К выполнению","in progress":"В работе","done":"Готово","backlog":"Бэклог",
+  "To Do":"Задачи","In Progress":"Выполняется","Done":"Выполнено","Archive":"Архив","todo":"Задачи","doing":"Выполняется","done":"Выполнено","archive":"Архив","backlog":"Бэклог",
   "Human task: agents skip it":"Задача для человека: агенты её пропускают","Delete comment":"Удалить комментарий","Delete this comment? This cannot be undone.":"Удалить этот комментарий? Это действие нельзя отменить.",
   "Project":"Проект","Attached image":"Прикреплённое изображение","Remove image":"Удалить изображение","Tasks":"Задачи","Recent":"Недавние",
   "No tasks match.":"Нет подходящих задач.","No tasks yet.":"Пока нет задач.","Shared":"Общий доступ","Share this board":"Открыть доступ к доске",
@@ -77,7 +77,7 @@ const UI_TRANSLATIONS = {
   "Joining…":"Подключение…","Join":"Подключиться","Board":"Доска","About":"О программе","Backlog column":"Колонка бэклога",
   "A column before todo, for tasks agents leave alone":"Колонка перед «К выполнению» для задач, которые агенты не должны затрагивать",
   "Task properties":"Свойства задач","Turn one off to hide it on the board and leave it out of what agents get. Nothing is deleted.":"Отключите свойство, чтобы скрыть его на доске и не передавать агентам. Данные не удаляются.",
-  "Language":"Язык","Choose the interface language":"Выберите язык интерфейса","Description":"Описание","Tags":"Теги","URL":"Ссылка",
+  "Language":"Язык","Choose the interface language":"Выберите язык интерфейса","Archive completed tasks":"Архивировать выполненные задачи","Move tasks from Done to Archive after this many days":"Перемещать задачи из «Выполнено» в «Архив» через указанное количество дней","Days before archiving completed tasks":"Дней до переноса выполненных задач в архив","Assignee":"Исполнитель","Name of the person responsible":"Имя ответственного","Unassigned":"Не назначен","Description":"Описание","Tags":"Теги","URL":"Ссылка",
   "Human":"Для человека","Created":"Создано","Updated":"Обновлено","Comments":"Комментарии","Images":"Изображения",
   "Search tasks":"Поиск задач","Filter board":"Фильтр доски","Filter the board":"Фильтровать доску","Show only human tasks":"Только задачи для человека",
   "Task title":"Название задачи","Add tags, like bug, ui":"Добавить теги, например bug, ui","Add a link, like a pull request":"Добавить ссылку, например на pull request",
@@ -141,6 +141,7 @@ function setUiLanguage(language) {
   localStorageSet("kanzo.language", uiLanguage);
   document.documentElement.lang = uiLanguage;
   localizeUi(document.body);
+  document.querySelectorAll("[data-status-label]").forEach((node) => { node.textContent = statusLabel(node.dataset.statusLabel); });
 }
 function initUiLanguage() {
   const picker = $("#settings-language");
@@ -255,6 +256,9 @@ function statusStep(status) {
   const i = statuses.indexOf(status);
   return i < 0 ? 0 : i - statuses.indexOf("todo");
 }
+
+const STATUS_LABELS = { todo: "To Do", doing: "In Progress", done: "Done", archive: "Archive", backlog: "Backlog" };
+function statusLabel(status) { return translateUiText(STATUS_LABELS[status] || status); }
 
 function statusColor(status) {
   const i = state.board ? statusStep(status) : 0;
@@ -633,10 +637,10 @@ function renderColumns() {
   if (state.layout !== layout) {
     state.layout = layout;
     columns.replaceChildren(...statuses.map((status) => {
-      const collapsible = status === "backlog" || status === "done";
+      const collapsible = status === "backlog" || status === "archive";
       const col = el("section", { class: "column", "data-status": status },
         el("h2", {},
-          statusIcon(status), status,
+          statusIcon(status), el("span", { "data-status-label": status }, statusLabel(status)),
           el("span", { class: "count" }),
           collapsible ? el("button", { class: "collapse", onclick: (e) => { e.stopPropagation(); setCollapsed(status, !isCollapsed(status)); } }) : null),
         el("div", { class: "cards" }),
@@ -657,8 +661,7 @@ function renderColumns() {
   for (const status of statuses) {
     const col = columns.querySelector(`[data-status="${CSS.escape(status)}"]`);
     const mine = tasks.filter((t) => t.status === status && (!humanOnly || t.human));
-    const last = status === statuses[statuses.length - 1];
-    const hidden = last && !state.allDone ? state.board.done_hidden || 0 : 0;
+    const hidden = status === "done" && !state.allDone ? state.board.done_hidden || 0 : 0;
     // Filtered, the server's count of older done tasks says nothing about human ones.
     const filtered = humanOnly || words.length > 0;
     const count = mine.length + (filtered ? 0 : hidden);
@@ -706,7 +709,8 @@ function highlight(name, root, words) {
 }
 
 function summary(t, link = null) {
-  const chips = [...(link ? [link] : []), ...(isPropertyHidden("tags") ? [] : t.tags.map((tag) => el("span", { class: "tag" }, tag)))];
+  const assignee = isPropertyHidden("assignee") ? null : el("span", { class: "tag" }, el("span", {}, "Assignee"), ": ", t.assignee || "Unassigned");
+  const chips = [...(link ? [link] : []), assignee, ...(isPropertyHidden("tags") ? [] : t.tags.map((tag) => el("span", { class: "tag" }, tag)))];
   return [
     t.description ? el("span", { class: "desc" }, plainText(t.description)) : null,
     chips.length ? el("span", { class: "tags" }, chips) : null,
@@ -957,10 +961,11 @@ async function refreshTask() {
   showDesc();
   const status = $("#p-status");
   const statuses = state.board ? state.board.statuses : [task.status];
-  status.replaceChildren(...statuses.map((s) => el("option", { value: s }, s)));
-  if (!statuses.includes(task.status)) status.append(el("option", { value: task.status }, task.status));
+  status.replaceChildren(...statuses.map((s) => el("option", { value: s }, statusLabel(s))));
+  if (!statuses.includes(task.status)) status.append(el("option", { value: task.status }, statusLabel(task.status)));
   status.value = task.status;
   $("#p-human").checked = task.human;
+  if (document.activeElement !== $("#p-assignee")) $("#p-assignee").value = task.assignee || "";
   $("#p-created").replaceChildren(timeEl(task.created_at));
   $("#p-updated").replaceChildren(timeEl(task.updated_at));
   $("#p-comment-count").textContent = comments.length ? String(comments.length) : "";
@@ -1076,6 +1081,16 @@ $("#p-desc-view").addEventListener("focus", editDesc);
 
 $("#p-status").addEventListener("change", (e) => patchTask({ status: e.target.value }));
 $("#p-human").addEventListener("change", (e) => patchTask({ human: e.target.checked }));
+$("#p-assignee").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); e.target.blur(); }
+  else if (e.key === "Escape") cancelField(e, panelTask ? panelTask.assignee || "" : "");
+});
+$("#p-assignee").addEventListener("blur", (e) => {
+  if (!panelTask) return;
+  const assignee = e.target.value.trim();
+  if (assignee !== (panelTask.assignee || "")) patchTask({ assignee });
+  else e.target.value = assignee;
+});
 
 let pending = [];
 
@@ -1513,6 +1528,7 @@ $("#settings").addEventListener("click", toggleSettingsMenu);
 function openSettings(section = "board") {
   closeMenu();
   $("#settings-backlog").checked = state.board?.statuses.includes("backlog") ?? false;
+  $("#settings-archive-days").value = state.board?.archive_after_days ?? 7;
   $("#settings-language").value = uiLanguage;
   document.querySelectorAll("[data-property]").forEach((box) => { box.checked = !isPropertyHidden(box.dataset.property); });
   $("#sync-url").value = syncRemote || "";
@@ -1551,7 +1567,12 @@ async function saveSetting(box, fields) {
   } catch (err) { box.checked = !box.checked; toast(err.message); }
 }
 $("#settings-backlog").addEventListener("change", (e) => saveSetting(e.target, { backlog: e.target.checked }));
-$('.settings-pane[data-section="board"]').append(...["Description", "Tags", "URL", "Human", "Created", "Updated", "Comments", "Images"].map((name) => {
+$("#settings-archive-days").addEventListener("change", async (e) => {
+  const days = Number(e.target.value);
+  if (!Number.isInteger(days) || days < 1 || days > 3650) { toast("Archive delay must be between 1 and 3650 days"); e.target.value = state.board?.archive_after_days ?? 7; return; }
+  try { await api("PATCH", "/settings", { archive_after_days: days }); loadBoard(); } catch (err) { toast(err.message); e.target.value = state.board?.archive_after_days ?? 7; }
+});
+$('.settings-pane[data-section="board"]').append(...["Description", "Tags", "URL", "Assignee", "Human", "Created", "Updated", "Comments", "Images"].map((name) => {
   const property = name.toLowerCase();
   return el("label", { class: "setting" }, el("span", { class: "text" }, name),
     el("span", { class: "switch" },
