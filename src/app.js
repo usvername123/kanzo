@@ -56,6 +56,106 @@ function localStorageSet(k, v) {
   try { localStorage.setItem(k, v); } catch {}
 }
 
+
+const UI_TRANSLATIONS = {
+  "All projects":"Все проекты","Projects":"Проекты","More":"Ещё","Color":"Цвет","Repos":"Репозитории","Rename":"Переименовать","Delete project":"Удалить проект",
+  "Link a repo: owner/repo":"Ссылка на репозиторий: владелец/репозиторий","Link a GitHub repo":"Привязать репозиторий GitHub",
+  "Settings":"Настройки","Check for updates":"Проверить обновления","Sync":"Синхронизация","Welcome to Kanzo":"Добро пожаловать в Kanzo",
+  "Create your first project in the sidebar. Link it to a GitHub repo and agents working in that repo will find it on their own.":"Создайте первый проект на боковой панели. Привяжите репозиторий GitHub — агенты, работающие с ним, обнаружат доску автоматически.",
+  "New project":"Новый проект","New task":"Новая задача","Create a project first":"Сначала создайте проект","Show older":"Показать старые","Backlog":"Бэклог",
+  "todo":"К выполнению","in progress":"В работе","done":"Готово","backlog":"Бэклог",
+  "Human task: agents skip it":"Задача для человека: агенты её пропускают","Delete comment":"Удалить комментарий","Delete this comment? This cannot be undone.":"Удалить этот комментарий? Это действие нельзя отменить.",
+  "Project":"Проект","Attached image":"Прикреплённое изображение","Remove image":"Удалить изображение","Tasks":"Задачи","Recent":"Недавние",
+  "No tasks match.":"Нет подходящих задач.","No tasks yet.":"Пока нет задач.","Shared":"Общий доступ","Share this board":"Открыть доступ к доске",
+  "Share this board, or join another":"Открыть доступ к этой доске или подключиться к другой","Copy the address":"Скопировать адрес",
+  "Connected now":"Сейчас подключены","No other computer is connected yet":"Другие компьютеры пока не подключены","A browser":"Браузер",
+  "This computer uses that board":"Этот компьютер использует эту доску","Stop sharing to join another board":"Отключите общий доступ, чтобы подключиться к другой доске",
+  "The address the sharing computer shows":"Адрес, указанный на компьютере, который открыл доступ","Join a shared board":"Подключиться к общей доске",
+  "Only the computer with the board can change this":"Изменять это может только компьютер с исходной доской",
+  "Other computers on your network can use it":"Другие компьютеры в вашей сети могут использовать эту доску",
+  "Other computers join it at the address for their network":"Другие компьютеры подключаются по сетевому адресу",
+  "Joining…":"Подключение…","Join":"Подключиться","Board":"Доска","About":"О программе","Backlog column":"Колонка бэклога",
+  "A column before todo, for tasks agents leave alone":"Колонка перед «К выполнению» для задач, которые агенты не должны затрагивать",
+  "Task properties":"Свойства задач","Turn one off to hide it on the board and leave it out of what agents get. Nothing is deleted.":"Отключите свойство, чтобы скрыть его на доске и не передавать агентам. Данные не удаляются.",
+  "Language":"Язык","Choose the interface language":"Выберите язык интерфейса","Description":"Описание","Tags":"Теги","URL":"Ссылка",
+  "Human":"Для человека","Created":"Создано","Updated":"Обновлено","Comments":"Комментарии","Images":"Изображения",
+  "Search tasks":"Поиск задач","Filter board":"Фильтр доски","Filter the board":"Фильтровать доску","Show only human tasks":"Только задачи для человека",
+  "Task title":"Название задачи","Add tags, like bug, ui":"Добавить теги, например bug, ui","Add a link, like a pull request":"Добавить ссылку, например на pull request",
+  "Agents skip it":"Агенты пропускают эту задачу","Add a description (Markdown)":"Добавить описание (Markdown)","Edit description":"Изменить описание",
+  "Add a comment":"Добавить комментарий","Send comment":"Отправить комментарий","Delete task":"Удалить задачу","Close":"Закрыть",
+  "Cancel":"Отмена","Create":"Создать","Name (optional)":"Название (необязательно)","Slug, like api":"Идентификатор, например api",
+  "GitHub repo (optional)":"Репозиторий GitHub (необязательно)","Letters, digits and -, up to 32":"Буквы, цифры и дефис, не более 32 символов",
+  "Search (/ or ⌘K)":"Поиск (/ или ⌘K)","Update":"Обновить","Checking…":"Проверка…",
+  "Checking for updates…":"Проверка обновлений…","Updating…":"Обновление…","Restart Kanzo to finish":"Перезапустите Kanzo для завершения",
+  "Can't reach GitHub to check for updates":"Не удалось связаться с GitHub для проверки обновлений","Kanzo is up to date":"Установлена последняя версия Kanzo",
+  "Syncing…":"Синхронизация…","Save and sync":"Сохранить и синхронизировать","Create a private repo on GitHub":"Создать приватный репозиторий на GitHub",
+  "Keep this board the same on all your machines through a private git repo you own. Use the same repo on each machine.":"Синхронизируйте доску между компьютерами через собственный приватный Git-репозиторий. Используйте один и тот же репозиторий на каждом компьютере.",
+  "There are no logins: share only on a network you trust.":"Вход в систему не предусмотрен: открывайте доступ только в доверенной сети.",
+  "English":"English","Русский":"Русский"
+};
+const UI_TRANSLATIONS_REVERSE = Object.fromEntries(Object.entries(UI_TRANSLATIONS).map(([en, ru]) => [ru, en]));
+let uiLanguage = localStorageGet("kanzo.language") || (navigator.language?.toLowerCase().startsWith("ru") ? "ru" : "en");
+function translateUiText(value) {
+  const source = String(value);
+  if (uiLanguage === "ru") {
+    if (UI_TRANSLATIONS[source]) return UI_TRANSLATIONS[source];
+    let m = source.match(/^(\d+) open tasks?$/);
+    if (m) return m[1] + " " + (Number(m[1]) === 1 ? "открытая задача" : "открытых задач");
+    m = source.match(/^Show (\d+) older$/);
+    if (m) return "Показать ещё " + m[1];
+    m = source.match(/^(\d+) comments?$/);
+    if (m) return m[1] + " " + (Number(m[1]) === 1 ? "комментарий" : "комментариев");
+    return source;
+  }
+  return UI_TRANSLATIONS_REVERSE[source] || source;
+}
+const UI_USER_CONTENT = ".card .title, .card .desc, .card .tag, .result .title, .result .desc, .result .tag, .comment, .who, .repo, .repo-link, .nav .name, .mono, .md, .guest, [data-user-content], #p-title, #p-desc, #p-comments, #p-project";
+function localizeUi(root) {
+  if (!root) return;
+  const translateNode = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!node.parentElement?.closest(UI_USER_CONTENT)) {
+        const next = translateUiText(node.nodeValue);
+        if (next !== node.nodeValue) node.nodeValue = next;
+      }
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const elNode = node;
+    if (elNode.matches?.(UI_USER_CONTENT)) return;
+    for (const attr of ["title", "aria-label", "placeholder", "alt"]) {
+      if (elNode.hasAttribute(attr)) {
+        const next = translateUiText(elNode.getAttribute(attr));
+        if (next !== elNode.getAttribute(attr)) elNode.setAttribute(attr, next);
+      }
+    }
+    for (const child of elNode.childNodes) translateNode(child);
+  };
+  translateNode(root);
+}
+function setUiLanguage(language) {
+  uiLanguage = language === "ru" ? "ru" : "en";
+  localStorageSet("kanzo.language", uiLanguage);
+  document.documentElement.lang = uiLanguage;
+  localizeUi(document.body);
+}
+function initUiLanguage() {
+  const picker = $("#settings-language");
+  if (picker) {
+    picker.value = uiLanguage;
+    picker.addEventListener("change", () => setUiLanguage(picker.value));
+  }
+  setUiLanguage(uiLanguage);
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.type === "characterData") localizeUi(record.target);
+      else if (record.type === "attributes") localizeUi(record.target);
+      else for (const node of record.addedNodes) localizeUi(node);
+    }
+  });
+  observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["title", "aria-label", "placeholder", "alt"] });
+}
+
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -494,7 +594,7 @@ function renderHeader() {
     return;
   }
   header.replaceChildren(
-    el("h1", {}, p.name),
+    el("h1", { "data-user-content": "" }, p.name),
     el("span", { class: "sub" }, open(p.open)),
     ...p.repos.map((r) => el("a", { class: "repo-link", href: `https://github.com/${r}`, target: "_blank", rel: "noopener",
                                     title: `Open ${r} on GitHub` }, icon("github"), r)),
@@ -1410,6 +1510,7 @@ $("#settings").addEventListener("click", toggleSettingsMenu);
 function openSettings(section = "board") {
   closeMenu();
   $("#settings-backlog").checked = state.board?.statuses.includes("backlog") ?? false;
+  $("#settings-language").value = uiLanguage;
   document.querySelectorAll("[data-property]").forEach((box) => { box.checked = !isPropertyHidden(box.dataset.property); });
   $("#sync-url").value = syncRemote || "";
   $("#sync-create").hidden = !!syncRemote;
@@ -1518,6 +1619,7 @@ async function installUpdate(available) {
   location.reload();
 }
 
+initUiLanguage();
 checkUpdate();
 setInterval(checkUpdate, 24 * 60 * 60 * 1000);
 loadSyncRemote();
